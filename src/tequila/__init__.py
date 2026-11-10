@@ -60,4 +60,5 @@ braket = BraKet
 
 warnings.filterwarnings("ignore", module="jax")
 warnings.filterwarnings("ignore", module="absl")
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="runpy")
 warnings.filterwarnings("default", category=TequilaWarning)

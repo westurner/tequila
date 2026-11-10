@@ -13,6 +13,8 @@ from tequila.simulators.simulator_symbolic import BackendCircuitSymbolic, Backen
 from tequila.wavefunction.density_matrix import DensityMatrix
 
 SUPPORTED_BACKENDS = [
+    "signals",
+    "grassmann",
     "qulacs",
     "qulacs_gpu",
     "qibo",
@@ -29,9 +31,9 @@ SUPPORTED_BACKENDS = [
     "cudaq",
 ]
 
-SUPPORTED_DENSITY_BACKENDS = ["qiskit"]
+SUPPORTED_DENSITY_BACKENDS = ["signals", "grassmann", "qiskit"]
 # TODO: Reenable noise for Qiskit
-SUPPORTED_NOISE_BACKENDS = ["cirq", "pyquil"]  # qulacs removed in v.1.9
+SUPPORTED_NOISE_BACKENDS = ["cirq", "pyquil", "signals", "grassmann"]  # qulacs removed in v.1.9
 
 
 class BackendTypes(NamedTuple):
@@ -55,6 +57,33 @@ if typing.TYPE_CHECKING:
 Check which simulators are installed
 We are distinguishing two classes of simulators: Samplers and full wavefunction simulators
 """
+
+HAS_SIGNALS = True
+try:
+    from tequila.simulators.simulator_signals import (
+        BackendBraKetSignals,
+        BackendCircuitSignals,
+        BackendExpectationValueSignals,
+    )
+
+    for _sig_name in ("signals", "grassmann"):
+        INSTALLED_SIMULATORS[_sig_name] = BackendTypes(
+            CircType=BackendCircuitSignals,
+            ExpValueType=BackendExpectationValueSignals,
+            BraKetType=BackendBraKetSignals,
+        )
+        INSTALLED_SAMPLERS[_sig_name] = BackendTypes(
+            CircType=BackendCircuitSignals,
+            ExpValueType=BackendExpectationValueSignals,
+            BraKetType=BackendBraKetSignals,
+        )
+        INSTALLED_NOISE_SAMPLERS[_sig_name] = BackendTypes(
+            CircType=BackendCircuitSignals,
+            ExpValueType=BackendExpectationValueSignals,
+            BraKetType=BackendBraKetSignals,
+        )
+except ImportError:
+    HAS_SIGNALS = False
 
 # a check block for cudaq
 HAS_CUDAQ = True
