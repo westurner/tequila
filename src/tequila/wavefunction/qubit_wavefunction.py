@@ -376,7 +376,17 @@ class QubitWaveFunction:
                     k = reverse_int_bits(k, self._n_qubits)
                 result += v.conjugate() * other[k]
             if isinstance(result, sympy.Basic):
-                result = complex(result)
+                from tequila.simulators.simulator_symbolic import (
+                    BackendCircuitSymbolic,
+                    evaluate_sympy_with_lambdify,
+                )
+
+                result = complex(
+                    evaluate_sympy_with_lambdify(
+                        result,
+                        lambdify_backend=BackendCircuitSymbolic.lambdify_backend,
+                    )
+                )
             return result
 
     def norm(self) -> float:

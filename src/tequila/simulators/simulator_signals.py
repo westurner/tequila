@@ -31,11 +31,18 @@ from tequila.simulators.simulator_base import (
     BackendCircuit,
     BackendExpectationValue,
 )
+from tequila.simulators.simulator_symbolic import (
+    BackendCircuitSymbolic,
+    DEFAULT_LAMBDIFY_BACKEND,
+    evaluate_sympy_with_lambdify,
+    get_lambdified_gate_factors,
+)
 from tequila.utils.bitstrings import reverse_int_bits
 from tequila.utils.keymap import KeyMapRegisterToSubregister
 from tequila.wavefunction.density_matrix import DensityMatrix
 from tequila.wavefunction.qubit_wavefunction import QubitWaveFunction
 
+import sympy
 import signals_numerical_adapter as sna
 
 logger = logging.getLogger("tequila.simulators.simulator_signals")
@@ -109,6 +116,7 @@ class BackendCircuitSignals(BackendCircuit):
     numbering = BitNumbering.MSB
     supports_sampling_initialization = True
     supports_generic_initialization = True
+    lambdify_backend: str = DEFAULT_LAMBDIFY_BACKEND
 
     def __init__(
         self,
@@ -119,12 +127,16 @@ class BackendCircuitSignals(BackendCircuit):
         device=None,
         mcweeny_passes: int = 0,
         seed: int = 1337,
+        lambdify_backend: str | None = None,
         *args,
         **kwargs,
     ):
         self.measurements = None
         self.mcweeny_passes = int(mcweeny_passes)
         self.seed = int(seed)
+        self.lambdify_backend = str(
+            lambdify_backend or self.__class__.lambdify_backend or DEFAULT_LAMBDIFY_BACKEND
+        )
         self._rust_circuit = None
         self._param_callables: list = []
         self._current_angles: list[float] = []
@@ -137,6 +149,12 @@ class BackendCircuitSignals(BackendCircuit):
             *args,
             **kwargs,
         )
+
+    @classmethod
+    def set_lambdify_backend(cls, lambdify_backend: str = DEFAULT_LAMBDIFY_BACKEND) -> str:
+        cls.lambdify_backend = str(lambdify_backend or DEFAULT_LAMBDIFY_BACKEND)
+        BackendCircuitSymbolic.set_lambdify_backend(cls.lambdify_backend)
+        return cls.lambdify_backend
 
     def initialize_circuit(self, *args, **kwargs) -> list[dict]:
         return []
@@ -176,10 +194,36 @@ class BackendCircuitSignals(BackendCircuit):
     def _resolve_angle(self, param, variables) -> float:
         if isinstance(param, (int, float, np.number)):
             return float(param)
+        if isinstance(param, sympy.Basic):
+            return float(
+                evaluate_sympy_with_lambdify(
+                    param,
+                    variables=variables,
+                    lambdify_backend=self.lambdify_backend,
+                )
+            )
         if callable(param):
-            return float(param(variables))
+            raw = param(variables)
+            if isinstance(raw, sympy.Basic):
+                return float(
+                    evaluate_sympy_with_lambdify(
+                        raw,
+                        variables=variables,
+                        lambdify_backend=self.lambdify_backend,
+                    )
+                )
+            return float(raw)
         if variables is not None and param in variables:
-            return float(variables[param])
+            val = variables[param]
+            if isinstance(val, sympy.Basic):
+                return float(
+                    evaluate_sympy_with_lambdify(
+                        val,
+                        variables=variables,
+                        lambdify_backend=self.lambdify_backend,
+                    )
+                )
+            return float(val)
         return float(param)
 
     def _register_angle(self, param, variables, rust_circuit) -> tuple[float, int | None]:
@@ -758,6 +802,7 @@ def benchmark_dense_expectation_scaling(
     backends: list[str] | None = None,
     repeats: int = 5,
     include_symbolic_max_qubits: int = 6,
+    lambdify_backend: str = DEFAULT_LAMBDIFY_BACKEND,
 ) -> list[dict[str, typing.Any]]:
     """
     Benchmarks Table 1 (Regime A): Full dense $2^n$ parametrized `Ry + CNOT + ExpPauli`
@@ -767,6 +812,7 @@ def benchmark_dense_expectation_scaling(
     import time
     import tequila as tq
 
+    BackendCircuitSignals.set_lambdify_backend(lambdify_backend)
     if configs is None:
         configs = list(DEFAULT_DENSE_CONFIGS)
 
@@ -774,9 +820,10 @@ def benchmark_dense_expectation_scaling(
         f"(n={nq}, L={nl}, M={nt})" for nq, nl, nt in configs
     )
     logger.info(
-        "Running dense 2^n expectation benchmark across %d configuration(s) (repeats=%d): [%s]",
+        "Running dense 2^n expectation benchmark across %d configuration(s) (repeats=%d, lambdify_backend=%s): [%s]",
         len(configs),
         repeats,
+        lambdify_backend,
         config_summary,
     )
     rows: list[dict[str, typing.Any]] = []
@@ -1304,6 +1351,7 @@ def benchmark_vqe_optimization_and_wavefunction(
     backends: list[str] | None = None,
     method: str = "BFGS",
     samples: int = 1000,
+    lambdify_backend: str = DEFAULT_LAMBDIFY_BACKEND,
 ) -> list[dict[str, typing.Any]]:
     """
     Benchmarks Table 3 (Regime C): Full multi-parameter VQE optimization (`tq.minimize`
@@ -1313,6 +1361,7 @@ def benchmark_vqe_optimization_and_wavefunction(
     import time
     import tequila as tq
 
+    BackendCircuitSignals.set_lambdify_backend(lambdify_backend)
     U_vqe = (
         tq.gates.X(target=0)
         + tq.gates.Ry(angle="a", target=1)
@@ -1550,11 +1599,13 @@ def run_all_benchmarks(
     chemistry_configs: list[tuple[int, int, int]] | None = None,
     repeats: int = 5,
     max_dense_ram_gb: float = 6.0,
+    lambdify_backend: str = DEFAULT_LAMBDIFY_BACKEND,
 ) -> dict[str, list[dict[str, typing.Any]]]:
     """
     Executes the requested Tequila `signals` / `grassmann` benchmark suite(s) and returns
     a dictionary mapping suite names to lists of benchmark result dictionaries.
     """
+    BackendCircuitSignals.set_lambdify_backend(lambdify_backend)
     eff_repeats = 2 if quick else max(1, int(repeats))
     suite_norm = suite.strip().lower()
     if suite_norm == "quick":
@@ -1573,6 +1624,7 @@ def run_all_benchmarks(
             backends=backends,
             repeats=eff_repeats,
             include_symbolic_max_qubits=4 if quick else 6,
+            lambdify_backend=lambdify_backend,
         )
 
     if suite_norm in ("all", "memory-wall"):
@@ -1608,6 +1660,7 @@ def run_all_benchmarks(
         results["vqe_optimization"] = benchmark_vqe_optimization_and_wavefunction(
             backends=vqe_backends,
             samples=250 if quick else 1000,
+            lambdify_backend=lambdify_backend,
         )
 
     if suite_norm in ("all", "plucker"):
@@ -1808,6 +1861,15 @@ def build_arg_parser():
         help="Maximum single-buffer dense statevector size in GiB before skipping (default: 6.0).",
     )
     parser.add_argument(
+        "--lambdify-backend",
+        type=str,
+        default=DEFAULT_LAMBDIFY_BACKEND,
+        help=(
+            "SymPy lambdify backend module (`modules=` argument to sympy.lambdify, "
+            "e.g. 'numpy', 'math', 'cmath', 'mpmath', 'scipy'; default: 'numpy')."
+        ),
+    )
+    parser.add_argument(
         "--json-out",
         type=str,
         default=None,
@@ -1890,11 +1952,13 @@ def main(argv: list[str] | None = None) -> int:
         quiet=bool(args.quiet),
         stream=sys.stdout,
     )
+    BackendCircuitSignals.set_lambdify_backend(args.lambdify_backend)
     logger.info(
-        "Starting Tequila signals/grassmann benchmark CLI (suite=%s, quick=%s, repeats=%d)",
+        "Starting Tequila signals/grassmann benchmark CLI (suite=%s, quick=%s, repeats=%d, lambdify_backend=%s)",
         args.suite,
         bool(args.quick),
         int(args.repeats),
+        args.lambdify_backend,
     )
     logger.debug("Parsed CLI arguments: %s", vars(args))
 
@@ -1918,6 +1982,7 @@ def main(argv: list[str] | None = None) -> int:
         chemistry_configs=chem_configs,
         repeats=int(args.repeats),
         max_dense_ram_gb=float(args.max_dense_ram_gb),
+        lambdify_backend=str(args.lambdify_backend),
     )
     md_text = format_benchmark_markdown_tables(results)
 

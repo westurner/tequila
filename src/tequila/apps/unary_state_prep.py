@@ -144,8 +144,19 @@ class UnaryStatePrep:
             # fails a lot of times
             # better don't use
             # get the angle variables from the symbolic equations for the angles
+            from tequila.simulators.simulator_symbolic import (
+                BackendCircuitSymbolic,
+                evaluate_sympy_with_lambdify,
+            )
+
             for symbol, eq in self._angle_equations.items():
-                result[symbol] = float(eq.evalf(subs=subs))
+                result[symbol] = float(
+                    evaluate_sympy_with_lambdify(
+                        eq,
+                        variables=subs,
+                        lambdify_backend=BackendCircuitSymbolic.lambdify_backend,
+                    )
+                )
         else:
             # numeric solution (more stable)
             # integrated repeat loop for the case that the randomly generated guess is especially bad
@@ -165,8 +176,19 @@ class UnaryStatePrep:
             if len(solutions) == 0:
                 raise TequilaUnaryStateException("Failed to numerically solve for angles")
 
+            from tequila.simulators.simulator_symbolic import (
+                BackendCircuitSymbolic,
+                evaluate_sympy_with_lambdify,
+            )
+
             for i, symbol in enumerate(self._abstract_angles):
-                result[symbol] = float(solutions[i].evalf(subs=subs))
+                result[symbol] = float(
+                    evaluate_sympy_with_lambdify(
+                        solutions[i],
+                        variables=subs,
+                        lambdify_backend=BackendCircuitSymbolic.lambdify_backend,
+                    )
+                )
 
         return result
 

@@ -75,6 +75,7 @@ def test_simulator_signals_benchmarks_and_cli_main(tmp_path):
             "tequila.simulators.benchmark_signals",
             "-v",
             "--log-level=DEBUG",
+            "--lambdify-backend=math",
             "--suite",
             "plucker",
         ],
@@ -85,4 +86,5 @@ def test_simulator_signals_benchmarks_and_cli_main(tmp_path):
     assert proc.returncode == 0
     assert "INFO [tequila.simulators.simulator_signals]" in proc.stdout
     assert "DEBUG [tequila.simulators.simulator_signals]" in proc.stdout
+    assert "lambdify_backend=math" in proc.stdout
     assert "Table 5:" in proc.stdout
