@@ -566,6 +566,111 @@ class BackendCircuitSignals(BackendCircuit):
             )
         )
 
+    def add_nonlinear_kerr_gate(self, target: int, chi3: float) -> None:
+        """
+        Appends an intensity-dependent self-Kerr / Gross–Pitaevskii nonlinear optical
+        phase gate $\\psi_x \\leftarrow \\exp(-i \\chi^{(3)} |\\psi_x|^2)\\psi_x$.
+        """
+        t_idx = int(self.qubit(target)) if target in self.qubit_map else int(target)
+        if self._rust_circuit is not None:
+            self._rust_circuit.add_nonlinear_kerr(t_idx, float(chi3), None)
+        self.circuit.append(
+            {
+                "kind": "nonlinear_kerr",
+                "target": t_idx,
+                "chi3": float(chi3),
+            }
+        )
+
+    def add_rydberg_blockade_gate(
+        self, targets: list[int], phi2: float, saturated: bool = True
+    ) -> None:
+        """
+        Appends a multi-qubit / multi-polariton Rydberg blockade phase gate
+        (Drori et al., Science 2023/2024): applies $\\phi_{\\mathrm{sat}}^{(k)} = (k-1)\\phi_2$
+        when `saturated=True` ($\\mathrm{Gr}_{\\mathbb{C}}(k,n)$ blockade-saturated vortex regime)
+        or pairwise Kerr $\\binom{k}{2}\\phi_2$ when `saturated=False`.
+        """
+        mapped = [
+            int(self.qubit(t)) if t in self.qubit_map else int(t) for t in targets
+        ]
+        if self._rust_circuit is not None:
+            self._rust_circuit.add_rydberg_blockade_phase(
+                mapped, float(phi2), None, bool(saturated)
+            )
+        self.circuit.append(
+            {
+                "kind": "rydberg_blockade",
+                "targets": mapped,
+                "phi2": float(phi2),
+                "saturated": bool(saturated),
+            }
+        )
+
+    def simulate_quantum_trajectories(
+        self,
+        hamiltonians=None,
+        variables=None,
+        noise_model=None,
+        n_trajectories: int = 256,
+        unraveling_mode: str = "quantum_jump",
+        seed: int | None = None,
+    ) -> dict:
+        """
+        Simulates an $N_{\\mathrm{traj}}$-trajectory Monte Carlo Wave Function (`MCWF`),
+        diffusive homodyne (`"homodyne_meridian"` / `"homodyne_equator"`), or bi-orthogonal
+        `"heterodyne"` ensemble in Rust, returning both unconditional ensemble expectations
+        and heralded zero-jump expectations (`quantumJumpHeraldedGateFidelity`).
+        """
+        self.update_variables(variables)
+        active_noise = noise_model if noise_model is not None else self.noise
+        noise_channels: list[tuple[str, int, float]] = []
+        if isinstance(active_noise, list):
+            noise_channels = [
+                (str(k), int(q), float(p)) for k, q, p in active_noise
+            ]
+        elif active_noise is not None and hasattr(active_noise, "noises"):
+            for n in active_noise.noises:
+                prob = float(n.probs[0]) if len(n.probs) > 0 else 0.0
+                for q in range(int(self.n_qubits)):
+                    noise_channels.append((str(n.name), int(q), prob))
+
+        raw_hams = []
+        if hamiltonians is not None:
+            ham_iter = (
+                hamiltonians
+                if isinstance(hamiltonians, (list, tuple))
+                else [hamiltonians]
+            )
+            for H in ham_iter:
+                terms = []
+                for ps in H.paulistrings:
+                    coeff = complex(ps.coeff)
+                    ops = [
+                        (
+                            int(self.qubit(q)) if q in self.qubit_map else int(q),
+                            str(op).upper(),
+                        )
+                        for q, op in ps.items()
+                    ]
+                    terms.append((float(np.real(coeff)), float(np.imag(coeff)), ops))
+                raw_hams.append(terms)
+        else:
+            raw_hams.append([(1.0, 0.0, [(0, "Z")])])
+
+        use_seed = int(seed) if seed is not None else int(self.seed)
+        return dict(
+            sna.py_simulate_quantum_trajectories_mcwf_msb(
+                int(self.n_qubits),
+                self.circuit,
+                noise_channels,
+                raw_hams,
+                int(n_trajectories),
+                str(unraveling_mode),
+                use_seed,
+            )
+        )
+
 
 class BackendExpectationValueSignals(BackendExpectationValue):
     """
@@ -618,6 +723,28 @@ class BackendExpectationValueSignals(BackendExpectationValue):
             )
             results.append(float(re_val))
         return np.asarray(results, dtype=float)
+
+    def compute_natural_gradient(
+        self,
+        variables=None,
+        ham_idx: int = 0,
+        eps_nodal: float = 1e-3,
+    ) -> dict:
+        """
+        Computes the exact parameter-shift Euclidean gradient $\\partial_\\mu E$,
+        diagonal Fubini–Study metric $g_{\\mu\\mu}^{\\mathrm{FS}}$, Quantum Fisher Information
+        Metric $F_{\\mu\\mu} = 4\\,g_{\\mu\\mu}^{\\mathrm{FS}}$, and Kähler-regularized
+        Quantum Natural Gradient (`QNG`) step $\\Delta\\theta_\\mu^{\\mathrm{QNG}}$ in Rust.
+        """
+        self.U.update_variables(variables)
+        return dict(
+            self.U._rust_circuit.natural_gradient_compiled(
+                self.U._current_angles,
+                self._rust_ham_set,
+                int(ham_idx),
+                float(eps_nodal),
+            )
+        )
 
 
 class BackendBraKetSignals(BackendBraKet):
